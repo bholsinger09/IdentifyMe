@@ -1,5 +1,7 @@
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 from transformers import DetrImageProcessor, DetrForSegmentation
+import json
+import os
 
 def get_person_mask(image_path):
     """
@@ -123,11 +125,18 @@ class IdentifyMeApp:
         )
         steps_spin.pack(side="left", padx=5)
 
+    def _enforce_single_subject(self, prompt):
+        # Add logic to enforce single subject in the prompt
+        if "single" not in prompt and "one" not in prompt and "solo" not in prompt:
+            prompt = "a single person, " + prompt
+        return prompt
+
     def generate_person_from_prompt(self):
         """
         Generate an image from the prompt only, using Stable Diffusion text-to-image pipeline.
         """
         prompt = self.prompt_var.get()
+        prompt = self._enforce_single_subject(prompt)
         if not prompt:
             import tkinter.messagebox as mb
             mb.showerror("Prompt Required", "Please enter a prompt.")
@@ -297,11 +306,11 @@ class IdentifyMeApp:
         self.content_frame = tb.Frame(self.canvas, style="Black.TFrame")
         self.canvas.create_window((0, 0), window=self.content_frame, anchor="nw")
 
-        # Resize image only if it's larger than the window
+        # Increase max_w and max_h for larger images
         win_w = self.root.winfo_width()
         win_h = self.root.winfo_height()
-        max_w = win_w - 60 if win_w > 100 else 800
-        max_h = win_h - 200 if win_h > 200 else 1000
+        max_w = win_w - 20 if win_w > 100 else 1200   # Was 60, now 20 for more width
+        max_h = win_h - 60 if win_h > 200 else 1600   # Was 200, now 60 for more height
         img_copy = img.copy()
         if img_copy.width > max_w or img_copy.height > max_h:
             img_copy.thumbnail((max_w, max_h))
@@ -500,6 +509,7 @@ class IdentifyMeApp:
             pipe = pipe.to("cpu")
             steps = self.steps_var.get()
             full_prompt = f"{prompt}. {correction}"  # <-- Always combine original prompt and correction
+            full_prompt = self._enforce_single_subject(full_prompt)
             result = pipe(prompt=full_prompt, num_inference_steps=steps, guidance_scale=7.5).images[0]
             # Save regenerated image to data/corrections/
             corrections_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "corrections"))
@@ -513,11 +523,39 @@ class IdentifyMeApp:
         except Exception as e:
             mb.showerror("Generation Error", f"Regeneration with correction failed: {e}")
 
-# ...existing code...
+    def save_session(self):
+        session = {
+            "prompt": self.prompt_var.get(),
+            "correction": self.correction_var.get(),
+            "steps": self.steps_var.get(),
+            "last_image_path": getattr(self, "last_image_path", None),
+            "last_prompt": getattr(self, "last_prompt", None)
+        }
+        session_path = os.path.join(os.path.dirname(__file__), "..", "data", "session.json")
+        with open(session_path, "w") as f:
+            json.dump(session, f)
 
+    def load_session(self):
+        session_path = os.path.join(os.path.dirname(__file__), "..", "data", "session.json")
+        if os.path.exists(session_path):
+            with open(session_path, "r") as f:
+                session = json.load(f)
+            self.prompt_var.set(session.get("prompt", ""))
+            self.correction_var.set(session.get("correction", ""))
+            self.steps_var.set(session.get("steps", 30))
+            self.last_image_path = session.get("last_image_path", None)
+            self.last_prompt = session.get("last_prompt", None)
+            if self.last_image_path and os.path.exists(self.last_image_path):
+                self.display_image(self.last_image_path)
 
 if __name__ == "__main__":
     import tkinter as tk
+    import os
     root = tk.Tk()
     app = IdentifyMeApp(root)
+    app.load_session()  # <-- Load session on startup
+    def on_closing():
+        app.save_session()  # <-- Save session on exit
+        root.destroy()
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
